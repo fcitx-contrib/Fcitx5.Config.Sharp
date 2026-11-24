@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>netstandard2.1</TargetFramework>
+        <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
         <LangVersion>14</LangVersion>
         <Nullable>enable</Nullable>
         <ImplicitUsings>disable</ImplicitUsings>
@@ -9,10 +9,17 @@
         <AssemblyName>Fcitx5.Config.Core</AssemblyName>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <NoWarn>$(NoWarn);CS1591</NoWarn>
+        <!-- The AOT analyzer only exists for net8.0+ target frameworks; enabling it on the
+             netstandard2.1 target is rejected with NETSDK1210. -->
+        <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Tmds.DBus" Version="0.95.2"/>
+        <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.2"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="Fcitx5.Config.Core.Tests"/>
     </ItemGroup>
 
 </Project>

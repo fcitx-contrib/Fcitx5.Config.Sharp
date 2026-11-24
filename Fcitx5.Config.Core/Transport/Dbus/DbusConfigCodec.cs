@@ -1,154 +1,155 @@
-using System;
 using System.Collections.Generic;
-using System.Globalization;
 using Fcitx5.Config.Core.Model;
+using Tmds.DBus.Protocol;
 
 namespace Fcitx5.Config.Core.Transport.Dbus;
 
 /// <summary>
-/// Encodes and decodes fcitx5 configuration payloads for the D-Bus transport.
+/// Encodes and decodes fcitx5 configuration payloads on the D-Bus wire format.
 /// </summary>
 /// <remarks>
-/// The wire format is defined by <c>rawConfigToVariant</c> / <c>variantToRawConfig</c> and
-/// <c>dumpDBusConfigDescription</c> in fcitx5's <c>src/lib/fcitx-config/dbushelper.cpp</c>:
-/// <list type="bullet">
-/// <item>a value is either a string (a leaf) or an <c>a{sv}</c> dictionary whose empty key carries
-/// the node's own value;</item>
-/// <item>a description is <c>a(sa(sssva{sv}))</c>.</item>
-/// </list>
-/// Every leaf is a D-Bus string; fcitx5 never emits numeric variants for configuration data, so
-/// integers, booleans and colours all travel as their textual representation.
 /// <para>
-/// Encoded dictionaries are built as <see cref="KeyValuePair{TKey,TValue}"/> arrays rather than
-/// <see cref="Dictionary{TKey,TValue}"/> instances. fcitx5 stores decoded entries in an ordered map,
-/// so the wire order defines the order of list elements; <see cref="Dictionary{TKey,TValue}"/>
-/// enumeration order is not specified and could silently reorder a configuration list.
+/// The format is defined by <c>rawConfigToVariant</c> / <c>variantToRawConfig</c> and
+/// <c>dumpDBusConfigDescription</c> in fcitx5's <c>src/lib/fcitx-config/dbushelper.cpp</c>:
+/// </para>
+/// <list type="bullet">
+/// <item>a value is either a string (a leaf) or an <c>a{sv}</c> map whose empty key carries the
+/// node's own value;</item>
+/// <item>a description is <c>a(sa(sssva{sv}))</c>, where the option's default value is a
+/// <c>v</c> and its properties a bare <c>a{sv}</c>.</item>
+/// </list>
+/// <para>
+/// Both encode and decode are streamed through the message reader and writer instead of building
+/// intermediate dictionaries. That keeps the arrival order of map entries, which <em>is</em> the
+/// order of a fcitx5 list, and avoids materialising a boxed object graph per configuration.
+/// </para>
+/// <para>
+/// A variant (<c>v</c>) carries its content type signature before the value; a bare <c>a{sv}</c>
+/// struct member does not. Mixing the two up produces a well formed but semantically wrong
+/// message, which the bus rejects by dropping the connection.
 /// </para>
 /// </remarks>
-public sealed class DbusConfigCodec
+internal static class DbusConfigCodec
 {
-    /// <summary>A shared codec instance; the codec is stateless.</summary>
-    public static DbusConfigCodec Instance { get; } = new();
+    private const string StringSignature = "s";
+    private const string MapSignature = "a{sv}";
 
-    /// <summary>Decodes a D-Bus value variant into the shared model.</summary>
-    public RawConfigValue DecodeValue(object? payload)
+    // ------------------------------------------------------------------ writing
+
+    /// <summary>Writes a <c>v</c> whose content is a configuration tree.</summary>
+    public static void WriteVariant(ref MessageWriter writer, RawConfigValue value)
     {
-        switch (payload)
-        {
-            case null:
-                return new RawConfigValue();
-
-            case string text:
-                return new RawConfigValue(text);
-
-            case IDictionary<string, object> map:
-                return DecodeEntries(map);
-
-            case IEnumerable<KeyValuePair<string, object>> entries:
-                // Also accept the array form produced by EncodeValue, so the codec round-trips on
-                // its own without a D-Bus round-trip in between.
-                return DecodeEntries(entries);
-
-            default:
-                return new RawConfigValue(AsString(payload));
-        }
-    }
-
-    /// <summary>
-    /// Encodes the shared model into a D-Bus value variant: a string for a leaf, or an ordered
-    /// <c>a{sv}</c> dictionary for a node with children.
-    /// </summary>
-    public object EncodeValue(RawConfigValue value)
-    {
-        if (value is null)
-        {
-            throw new ArgumentNullException(nameof(value));
-        }
-
         if (!value.HasChildren)
         {
-            return value.Value ?? string.Empty;
+            writer.WriteVariantString(value.Value ?? string.Empty);
+            return;
         }
 
-        var entries = new List<KeyValuePair<string, object>>(value.ChildNames.Count + 1);
+        writer.WriteSignature(MapSignature);
+        WriteMap(ref writer, value);
+    }
+
+    /// <summary>Writes a bare <c>a{sv}</c> map holding a configuration tree.</summary>
+    public static void WriteMap(ref MessageWriter writer, RawConfigValue value)
+    {
+        var start = writer.WriteDictionaryStart();
 
         if (!string.IsNullOrEmpty(value.Value))
         {
-            entries.Add(new KeyValuePair<string, object>(RawConfigValue.SelfKey, value.Value!));
+            writer.WriteDictionaryEntryStart();
+            writer.WriteString(RawConfigValue.SelfKey);
+            writer.WriteVariantString(value.Value!);
         }
 
         foreach (var pair in value.OrderedChildren)
         {
-            entries.Add(new KeyValuePair<string, object>(pair.Key, EncodeValue(pair.Value)));
+            writer.WriteDictionaryEntryStart();
+            writer.WriteString(pair.Key);
+            WriteVariant(ref writer, pair.Value);
         }
 
-        return entries.ToArray();
+        writer.WriteDictionaryEnd(start);
     }
 
-    /// <summary>Decodes a D-Bus configuration description into the shared model.</summary>
-    public ConfigDescription DecodeDescription(object? payload)
+    // ------------------------------------------------------------------ reading
+
+    /// <summary>Reads a <c>v</c> holding a configuration tree.</summary>
+    public static RawConfigValue ReadVariant(ref Reader reader)
     {
-        var types = payload as DbusConfigType[];
-        if (types is null || types.Length == 0)
+        var signature = reader.ReadSignatureAsString();
+        if (signature == StringSignature)
         {
-            return ConfigDescription.Empty;
+            return new RawConfigValue(reader.ReadString());
         }
 
-        var result = new ConfigTypeDescription[types.Length];
-        for (var i = 0; i < types.Length; i++)
+        if (signature == MapSignature)
         {
-            var type = types[i];
-            var source = type.Options ?? Array.Empty<DbusConfigOption>();
-            var options = new OptionDescription[source.Length];
-            for (var j = 0; j < source.Length; j++)
-            {
-                var option = source[j];
-                options[j] = new OptionDescription(
-                    option.Name ?? string.Empty,
-                    OptionType.Parse(option.Type),
-                    option.Description ?? string.Empty,
-                    option.DefaultValue is null ? null : DecodeValue(option.DefaultValue),
-                    // The decoded tree is fresh and never mutated afterwards, so skip the
-                    // defensive copy the public constructor would make.
-                    OptionConstraints.FromOwned(DecodeValue(option.Properties)));
-            }
-
-            result[i] = new ConfigTypeDescription(type.Name ?? string.Empty, options);
+            return ReadMap(ref reader);
         }
 
-        return new ConfigDescription(result);
+        // fcitx5 only ever emits a string or a map here (every configuration leaf is textual).
+        // Anything else means the protocol changed, so fail with the signature instead of
+        // silently coercing the value into the string based model.
+        throw new DBusReadException($"Unsupported configuration value signature '{signature}'.");
     }
 
-    private static RawConfigValue DecodeEntries(IEnumerable<KeyValuePair<string, object>> entries)
+    /// <summary>Reads a bare <c>a{sv}</c> map holding a configuration tree.</summary>
+    public static RawConfigValue ReadMap(ref Reader reader)
     {
         var node = new RawConfigValue();
-        foreach (var pair in entries)
+        var end = reader.ReadDictionaryStart();
+        while (reader.HasNext(end))
         {
-            if (pair.Key.Length == 0)
+            reader.AlignStruct();
+            var key = reader.ReadString();
+            var value = ReadVariant(ref reader);
+
+            if (key.Length == 0)
             {
-                node.Value = AsString(pair.Value);
+                node.Value = value.Value;
             }
             else
             {
-                node.SetChild(pair.Key, Prepare(pair.Value));
+                node.SetChild(key, value);
             }
         }
 
         return node;
     }
 
-    private static RawConfigValue Prepare(object? payload) => payload switch
+    /// <summary>Reads an <c>a(sa(sssva{sv}))</c> configuration description.</summary>
+    public static ConfigDescription ReadDescription(ref Reader reader)
     {
-        null => new RawConfigValue(),
-        IDictionary<string, object> map => DecodeEntries(map),
-        IEnumerable<KeyValuePair<string, object>> entries => DecodeEntries(entries),
-        _ => new RawConfigValue(AsString(payload)),
-    };
+        var groups = new List<ConfigTypeDescription>();
+        var end = reader.ReadArrayStart(DBusType.Struct);
+        while (reader.HasNext(end))
+        {
+            reader.AlignStruct();
+            var groupName = reader.ReadString();
 
-    private static string AsString(object? payload) => payload switch
-    {
-        null => string.Empty,
-        string text => text,
-        _ => Convert.ToString(payload, CultureInfo.InvariantCulture) ?? string.Empty,
-    };
+            var options = new List<OptionDescription>();
+            var optionsEnd = reader.ReadArrayStart(DBusType.Struct);
+            while (reader.HasNext(optionsEnd))
+            {
+                reader.AlignStruct();
+                var name = reader.ReadString();
+                var type = reader.ReadString();
+                var description = reader.ReadString();
+                var defaultValue = ReadVariant(ref reader);
+                var properties = ReadMap(ref reader);
+
+                options.Add(new OptionDescription(
+                    name,
+                    OptionType.Parse(type),
+                    description,
+                    defaultValue,
+                    // The decoded tree is private to this option, so skip the defensive copy.
+                    OptionConstraints.FromOwned(properties)));
+            }
+
+            groups.Add(new ConfigTypeDescription(groupName, options.ToArray()));
+        }
+
+        return groups.Count == 0 ? ConfigDescription.Empty : new ConfigDescription(groups.ToArray());
+    }
 }

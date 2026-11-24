@@ -1,41 +1,53 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Tmds.DBus;
+using Tmds.DBus.Protocol;
 
 namespace Fcitx5.Config.Core.Transport.Dbus;
 
 /// <summary>
-/// Owns the D-Bus session bus connection and tracks whether fcitx5 is currently registered.
+/// Owns the D-Bus connection to the session bus and tracks whether fcitx5 is registered.
 /// </summary>
 /// <remarks>
 /// <para>
-/// fcitx5 registers the well-known name <c>org.fcitx.Fcitx5</c> on the session bus. Availability is
-/// tracked with <see cref="IConnection.ResolveServiceOwnerAsync(string, Action{ServiceOwnerChangedEventArgs}, Action{Exception})"/>,
-/// which invokes the handler immediately with the current owner and again on every change.
+/// fcitx5 registers the well-known name <c>org.fcitx.Fcitx5</c>. Availability is tracked with
+/// <see cref="DBusConnection.WatchNameOwnerAsync"/>, which reports the current owner immediately
+/// and yields a token that fires whenever that owner goes away.
 /// </para>
 /// <para>
-/// The connection is not re-established automatically after the bus disconnects; create a new
-/// instance in that case.
+/// The connection is not re-established after the bus disconnects; create a new instance in that
+/// case. Calling <see cref="ConnectAsync"/> again after a failure retries.
 /// </para>
 /// </remarks>
-public sealed class FcitxConnection : IDisposable, IAsyncDisposable
+internal sealed class FcitxConnection : IDisposable, IAsyncDisposable
 {
     /// <summary>The well-known bus name of the fcitx5 daemon.</summary>
     public const string ServiceName = "org.fcitx.Fcitx5";
 
+    private readonly string? _busAddress;
     private readonly object _gate = new();
-    private Connection? _connection;
+
+    private DBusConnection? _connection;
+    private NameOwnerWatcher? _watcher;
+    private CancellationTokenSource? _watchCancellation;
     private Task? _connectTask;
-    private IDisposable? _ownerWatcher;
     private bool _isAvailable;
     private bool _disposed;
+
+    /// <param name="busAddress">
+    /// The bus to connect to; <see langword="null"/> means the session bus. Tests use it to point
+    /// at a private bus.
+    /// </param>
+    public FcitxConnection(string? busAddress = null)
+    {
+        _busAddress = busAddress;
+    }
 
     /// <summary>Raised when fcitx5 becomes available or unavailable.</summary>
     public event EventHandler<bool>? AvailabilityChanged;
 
     /// <summary>The underlying connection, or <see langword="null"/> before <see cref="ConnectAsync"/>.</summary>
-    public IConnection? Connection
+    public DBusConnection? Connection
     {
         get
         {
@@ -59,8 +71,8 @@ public sealed class FcitxConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Connects to the session bus and starts watching for fcitx5. Calling this more than once
-    /// returns the same operation; after a failure the next call retries.
+    /// Connects to the bus and starts watching for fcitx5. Calling this more than once returns the
+    /// same operation; after a failure the next call retries.
     /// </summary>
     public Task ConnectAsync(CancellationToken cancellationToken = default)
     {
@@ -76,22 +88,24 @@ public sealed class FcitxConnection : IDisposable, IAsyncDisposable
 
     private async Task ConnectCoreAsync()
     {
-        var connection = new Connection(Address.Session);
-
-        lock (_gate)
-        {
-            _connection = connection;
-        }
-
-        connection.StateChanged += OnStateChanged;
+        DBusConnection? connection = null;
 
         try
         {
+            var address = _busAddress ?? DBusAddress.Session
+                ?? throw new InvalidOperationException("The D-Bus session bus address is not set.");
+
+            connection = new DBusConnection(address);
+
+            lock (_gate)
+            {
+                _connection = connection;
+            }
+
             await connection.ConnectAsync().ConfigureAwait(false);
 
-            var watcher = await connection
-                .ResolveServiceOwnerAsync(ServiceName, OnServiceOwnerChanged, OnWatcherError)
-                .ConfigureAwait(false);
+            var watcher = await connection.WatchNameOwnerAsync(ServiceName).ConfigureAwait(false);
+            var cancellation = new CancellationTokenSource();
 
             bool disposeNow;
             lock (_gate)
@@ -99,45 +113,83 @@ public sealed class FcitxConnection : IDisposable, IAsyncDisposable
                 disposeNow = _disposed;
                 if (!disposeNow)
                 {
-                    _ownerWatcher = watcher;
+                    _watcher = watcher;
+                    _watchCancellation = cancellation;
                 }
             }
 
             if (disposeNow)
             {
                 watcher.Dispose();
-                connection.StateChanged -= OnStateChanged;
                 connection.Dispose();
+                return;
             }
+
+            SetAvailability(watcher.GetCurrentOwner() is not null);
+            _ = WatchAvailabilityAsync(watcher, cancellation.Token);
         }
         catch
         {
             lock (_gate)
             {
-                if (ReferenceEquals(_connection, connection))
+                if (connection is not null && ReferenceEquals(_connection, connection))
                 {
                     _connection = null;
                 }
 
+                // Reset so that the next ConnectAsync retries instead of replaying the failure.
                 _connectTask = null;
                 _isAvailable = false;
             }
 
-            connection.StateChanged -= OnStateChanged;
-            connection.Dispose();
+            connection?.Dispose();
             throw;
         }
     }
 
-    private void OnServiceOwnerChanged(ServiceOwnerChangedEventArgs args) =>
-        SetAvailability(!string.IsNullOrEmpty(args.NewOwner));
-
-    private void OnWatcherError(Exception exception) => SetAvailability(false);
-
-    private void OnStateChanged(object? sender, ConnectionStateChangedEventArgs args)
+    private async Task WatchAvailabilityAsync(NameOwnerWatcher watcher, CancellationToken cancellationToken)
     {
-        if (args.State == ConnectionState.Disconnected)
+        try
         {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                string owner;
+                try
+                {
+                    owner = await watcher.WaitForOwnerAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+
+                SetAvailability(true);
+
+                // The owner token fires when the daemon exits, restarts or drops the name.
+                using var ownerChanged = CancellationTokenSource.CreateLinkedTokenSource(
+                    watcher.GetOwnerChangedCancellationToken(owner),
+                    cancellationToken);
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, ownerChanged.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Either the owner changed or the loop was asked to stop; the loop condition
+                    // decides which, and SetAvailability ignores the update after disposal.
+                }
+
+                SetAvailability(false);
+            }
+        }
+        catch (Exception)
+        {
+            // A closed bus or a disposed watcher ends tracking. The connection is not re-established;
+            // create a new instance, as the type remarks say.
             SetAvailability(false);
         }
     }
@@ -173,8 +225,9 @@ public sealed class FcitxConnection : IDisposable, IAsyncDisposable
     /// <inheritdoc/>
     public void Dispose()
     {
-        Connection? connection;
-        IDisposable? watcher;
+        DBusConnection? connection;
+        NameOwnerWatcher? watcher;
+        CancellationTokenSource? watchCancellation;
         lock (_gate)
         {
             if (_disposed)
@@ -185,23 +238,23 @@ public sealed class FcitxConnection : IDisposable, IAsyncDisposable
             _disposed = true;
             _isAvailable = false;
             connection = _connection;
-            watcher = _ownerWatcher;
+            watcher = _watcher;
+            watchCancellation = _watchCancellation;
             _connection = null;
-            _ownerWatcher = null;
+            _watcher = null;
+            _watchCancellation = null;
             _connectTask = null;
         }
 
+        // The source is cancelled but not disposed: the availability loop may still be awaiting
+        // its token, and disposing it underneath would surface as ObjectDisposedException.
+        watchCancellation?.Cancel();
         watcher?.Dispose();
-
-        if (connection is not null)
-        {
-            connection.StateChanged -= OnStateChanged;
-            connection.Dispose();
-        }
+        connection?.Dispose();
     }
 
     /// <summary>
-    /// Disposes the connection. The underlying Tmds.DBus connection only supports synchronous
+    /// Disposes the connection. Both Tmds.DBus connections and watchers only support synchronous
     /// disposal, so nothing is awaited.
     /// </summary>
     public ValueTask DisposeAsync()
