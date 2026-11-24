@@ -18,7 +18,7 @@ namespace Fcitx5.Config.Core.Transport.Dbus;
 internal sealed class DbusSession : IFcitxSession
 {
     private readonly FcitxConnection _connection;
-    private FcitxControllerProxy? _proxy;
+    private ControllerClient? _client;
     private bool _disposed;
 
     /// <summary>Creates a session that owns its own bus connection.</summary>
@@ -55,7 +55,7 @@ internal sealed class DbusSession : IFcitxSession
         var connection = _connection.Connection
                          ?? throw new InvalidOperationException("The D-Bus connection is not available.");
 
-        _proxy = new FcitxControllerProxy(connection, FcitxConnection.ServiceName);
+        _client = new ControllerClient(connection, FcitxConnection.ServiceName);
     }
 
     // ---------------------------------------------------------------- configuration
@@ -68,7 +68,7 @@ internal sealed class DbusSession : IFcitxSession
             throw new ArgumentException("A fcitx5 configuration URI is required.", nameof(uri));
         }
 
-        var (value, description) = await Proxy.GetConfigAsync(uri, cancellationToken).ConfigureAwait(false);
+        var (value, description) = await Client.GetConfigAsync(uri, cancellationToken).ConfigureAwait(false);
         return new ConfigSnapshot(uri, value, description);
     }
 
@@ -88,7 +88,7 @@ internal sealed class DbusSession : IFcitxSession
             throw new ArgumentNullException(nameof(value));
         }
 
-        await Proxy.SetConfigAsync(uri, value, cancellationToken).ConfigureAwait(false);
+        await Client.SetConfigAsync(uri, value, cancellationToken).ConfigureAwait(false);
     }
 
     // ---------------------------------------------------------------- addons
@@ -98,12 +98,12 @@ internal sealed class DbusSession : IFcitxSession
     {
         try
         {
-            return await Proxy.GetAddonsV2Async(cancellationToken).ConfigureAwait(false);
+            return await Client.GetAddonsV2Async(cancellationToken).ConfigureAwait(false);
         }
-        catch (DBusErrorReplyException exception) when (FcitxControllerProxy.IsUnknownMethod(exception))
+        catch (DBusErrorReplyException exception) when (ControllerClient.IsUnknownMethod(exception))
         {
             // Daemons predating GetAddonsV2 only report the shorter set of fields.
-            return await Proxy.GetAddonsAsync(cancellationToken).ConfigureAwait(false);
+            return await Client.GetAddonsV1Async(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -117,7 +117,7 @@ internal sealed class DbusSession : IFcitxSession
             throw new ArgumentNullException(nameof(states));
         }
 
-        await Proxy.SetAddonsEnabledAsync(states, cancellationToken).ConfigureAwait(false);
+        await Client.SetAddonsEnabledAsync(states, cancellationToken).ConfigureAwait(false);
     }
 
     // ---------------------------------------------------------------- input methods
@@ -125,23 +125,23 @@ internal sealed class DbusSession : IFcitxSession
     /// <inheritdoc/>
     public async Task<IReadOnlyList<InputMethodEntry>> GetInputMethodsAsync(
         CancellationToken cancellationToken = default) =>
-        await Proxy.GetInputMethodsAsync(cancellationToken).ConfigureAwait(false);
+        await Client.GetInputMethodsAsync(cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<string>> GetInputMethodGroupsAsync(
         CancellationToken cancellationToken = default) =>
-        await Proxy.GetInputMethodGroupsAsync(cancellationToken).ConfigureAwait(false);
+        await Client.GetInputMethodGroupsAsync(cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<string> GetCurrentInputMethodGroupAsync(CancellationToken cancellationToken = default) =>
-        await Proxy.GetCurrentInputMethodGroupAsync(cancellationToken).ConfigureAwait(false);
+        await Client.GetCurrentInputMethodGroupAsync(cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<InputMethodGroup> GetInputMethodGroupAsync(
         string? groupName = null,
         CancellationToken cancellationToken = default)
     {
-        var group = await Proxy
+        var group = await Client
             .GetInputMethodGroupAsync(groupName ?? string.Empty, cancellationToken)
             .ConfigureAwait(false);
 
@@ -166,14 +166,14 @@ internal sealed class DbusSession : IFcitxSession
             throw new ArgumentNullException(nameof(group));
         }
 
-        await Proxy.SetInputMethodGroupAsync(group, cancellationToken).ConfigureAwait(false);
+        await Client.SetInputMethodGroupAsync(group, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async Task AddInputMethodGroupAsync(string groupName, CancellationToken cancellationToken = default)
     {
         RequireName(groupName, nameof(groupName), "A group name is required.");
-        await Proxy.AddInputMethodGroupAsync(groupName, cancellationToken).ConfigureAwait(false);
+        await Client.AddInputMethodGroupAsync(groupName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -182,7 +182,7 @@ internal sealed class DbusSession : IFcitxSession
         CancellationToken cancellationToken = default)
     {
         RequireName(groupName, nameof(groupName), "A group name is required.");
-        await Proxy.RemoveInputMethodGroupAsync(groupName, cancellationToken).ConfigureAwait(false);
+        await Client.RemoveInputMethodGroupAsync(groupName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -191,26 +191,26 @@ internal sealed class DbusSession : IFcitxSession
         CancellationToken cancellationToken = default)
     {
         RequireName(groupName, nameof(groupName), "A group name is required.");
-        await Proxy.SwitchInputMethodGroupAsync(groupName, cancellationToken).ConfigureAwait(false);
+        await Client.SwitchInputMethodGroupAsync(groupName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<KeyboardLayoutInfo>> GetKeyboardLayoutsAsync(
         CancellationToken cancellationToken = default) =>
-        await Proxy.GetKeyboardLayoutsAsync(cancellationToken).ConfigureAwait(false);
+        await Client.GetKeyboardLayoutsAsync(cancellationToken).ConfigureAwait(false);
 
     // ---------------------------------------------------------------- runtime
 
     /// <inheritdoc/>
     public async Task<FcitxState> GetStateAsync(CancellationToken cancellationToken = default)
     {
-        var state = await Proxy.GetStateAsync(cancellationToken).ConfigureAwait(false);
+        var state = await Client.GetStateAsync(cancellationToken).ConfigureAwait(false);
         return state is >= 0 and <= 2 ? (FcitxState)state : FcitxState.Closed;
     }
 
     /// <inheritdoc/>
     public async Task<string> GetCurrentInputMethodAsync(CancellationToken cancellationToken = default) =>
-        await Proxy.GetCurrentInputMethodAsync(cancellationToken).ConfigureAwait(false);
+        await Client.GetCurrentInputMethodAsync(cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task SetCurrentInputMethodAsync(
@@ -218,51 +218,51 @@ internal sealed class DbusSession : IFcitxSession
         CancellationToken cancellationToken = default)
     {
         RequireName(uniqueName, nameof(uniqueName), "An input method unique name is required.");
-        await Proxy.SetCurrentInputMethodAsync(uniqueName, cancellationToken).ConfigureAwait(false);
+        await Client.SetCurrentInputMethodAsync(uniqueName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public Task ActivateAsync(CancellationToken cancellationToken = default) =>
-        Proxy.ActivateAsync(cancellationToken);
+        Client.ActivateAsync(cancellationToken);
 
     /// <inheritdoc/>
     public Task DeactivateAsync(CancellationToken cancellationToken = default) =>
-        Proxy.DeactivateAsync(cancellationToken);
+        Client.DeactivateAsync(cancellationToken);
 
     /// <inheritdoc/>
     public Task ToggleAsync(CancellationToken cancellationToken = default) =>
-        Proxy.ToggleAsync(cancellationToken);
+        Client.ToggleAsync(cancellationToken);
 
     // ---------------------------------------------------------------- lifecycle
 
     /// <inheritdoc/>
     public Task ReloadConfigAsync(CancellationToken cancellationToken = default) =>
-        Proxy.ReloadConfigAsync(cancellationToken);
+        Client.ReloadConfigAsync(cancellationToken);
 
     /// <inheritdoc/>
     public async Task ReloadAddonConfigAsync(string addonName, CancellationToken cancellationToken = default)
     {
         RequireName(addonName, nameof(addonName), "An addon name is required.");
-        await Proxy.ReloadAddonConfigAsync(addonName, cancellationToken).ConfigureAwait(false);
+        await Client.ReloadAddonConfigAsync(addonName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public Task<bool> CanRestartAsync(CancellationToken cancellationToken = default) =>
-        Proxy.CanRestartAsync(cancellationToken);
+        Client.CanRestartAsync(cancellationToken);
 
     /// <inheritdoc/>
-    public Task RestartAsync(CancellationToken cancellationToken = default) => Proxy.RestartAsync(cancellationToken);
+    public Task RestartAsync(CancellationToken cancellationToken = default) => Client.RestartAsync(cancellationToken);
 
     /// <inheritdoc/>
-    public Task ExitAsync(CancellationToken cancellationToken = default) => Proxy.ExitAsync(cancellationToken);
+    public Task ExitAsync(CancellationToken cancellationToken = default) => Client.ExitAsync(cancellationToken);
 
     /// <inheritdoc/>
-    public Task RefreshAsync(CancellationToken cancellationToken = default) => Proxy.RefreshAsync(cancellationToken);
+    public Task RefreshAsync(CancellationToken cancellationToken = default) => Client.RefreshAsync(cancellationToken);
 
     // ---------------------------------------------------------------- internals
 
-    private FcitxControllerProxy Proxy =>
-        _proxy ?? throw new InvalidOperationException(
+    private ControllerClient Client =>
+        _client ?? throw new InvalidOperationException(
             $"{nameof(DbusSession)} is not connected; call {nameof(ConnectAsync)} first.");
 
     private static void RequireName(string value, string parameterName, string message)
@@ -290,7 +290,7 @@ internal sealed class DbusSession : IFcitxSession
         }
 
         _disposed = true;
-        _proxy = null;
+        _client = null;
         _connection.Dispose();
     }
 

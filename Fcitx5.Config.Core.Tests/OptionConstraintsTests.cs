@@ -50,6 +50,22 @@ public class OptionConstraintsTests
     }
 
     [Fact]
+    public void Enum_IsOrderedByItsPositionKey()
+    {
+        // The tree comes from a dictionary, so insertion order is not a guarantee; the "0", "1",
+        // ... keys are. Here they are inserted out of order on purpose.
+        var raw = new RawConfigValue();
+        var names = raw.GetOrAddChild("Enum");
+        names.SetChild("1", "Program");
+        names.SetChild("0", "All");
+        names.SetChild("2", "No");
+
+        var items = new OptionConstraints(raw).EnumValues;
+
+        Assert.Equal(new[] { "All", "Program", "No" }, items.Select(item => item.Name));
+    }
+
+    [Fact]
     public void Enum_WithoutLocalization_FallsBackToNames()
     {
         var raw = new RawConfigValue();

@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The part of org.fcitx.Fcitx.Controller1 this library calls.
+
+  Taken from a running fcitx5 with gdbus introspect, passing the session bus, the
+  org.fcitx.Fcitx5 destination, the /controller object path and the xml output flag.
+
+  The generator turns each signature into the readers and writers that frame the message, so a
+  signature here must match the daemon exactly. Regenerate this file when a method this library
+  uses changes shape; unused members are deliberately left out.
+-->
+<node>
+  <interface name="org.fcitx.Fcitx.Controller1">
+
+    <!-- configuration -->
+
+    <method name="GetConfig">
+      <arg name="uri" type="s" direction="in"/>
+      <arg name="value" type="v" direction="out"/>
+      <arg name="description" type="a(sa(sssva{sv}))" direction="out"/>
+    </method>
+
+    <method name="SetConfig">
+      <arg name="uri" type="s" direction="in"/>
+      <arg name="value" type="v" direction="in"/>
+    </method>
+
+    <!-- addons -->
+
+    <method name="GetAddonsV2">
+      <arg name="addons" type="a(sssibbbasas)" direction="out"/>
+    </method>
+
+    <method name="GetAddons">
+      <arg name="addons" type="a(sssibb)" direction="out"/>
+    </method>
+
+    <method name="SetAddonsState">
+      <arg name="states" type="a(sb)" direction="in"/>
+    </method>
+
+    <!-- input methods -->
+
+    <method name="AvailableInputMethods">
+      <arg name="inputMethods" type="a(ssssssb)" direction="out"/>
+    </method>
+
+    <method name="AvailableKeyboardLayouts">
+      <arg name="layouts" type="a(ssasa(ssas))" direction="out"/>
+    </method>
+
+    <method name="InputMethodGroups">
+      <arg name="groups" type="as" direction="out"/>
+    </method>
+
+    <method name="CurrentInputMethodGroup">
+      <arg name="group" type="s" direction="out"/>
+    </method>
+
+    <method name="FullInputMethodGroupInfo">
+      <arg name="group" type="s" direction="in"/>
+      <arg name="name" type="s" direction="out"/>
+      <arg name="defaultInputMethod" type="s" direction="out"/>
+      <arg name="defaultLayout" type="s" direction="out"/>
+      <arg name="properties" type="a{sv}" direction="out"/>
+      <arg name="items" type="a(sssssssbsa{sv})" direction="out"/>
+    </method>
+
+    <method name="SetInputMethodGroupInfo">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="defaultLayout" type="s" direction="in"/>
+      <arg name="items" type="a(ss)" direction="in"/>
+    </method>
+
+    <method name="AddInputMethodGroup">
+      <arg name="group" type="s" direction="in"/>
+    </method>
+
+    <method name="RemoveInputMethodGroup">
+      <arg name="group" type="s" direction="in"/>
+    </method>
+
+    <method name="SwitchInputMethodGroup">
+      <arg name="group" type="s" direction="in"/>
+    </method>
+
+    <!-- runtime -->
+
+    <method name="State">
+      <arg name="state" type="i" direction="out"/>
+    </method>
+
+    <method name="CurrentInputMethod">
+      <arg name="inputMethod" type="s" direction="out"/>
+    </method>
+
+    <method name="SetCurrentIM">
+      <arg name="inputMethod" type="s" direction="in"/>
+    </method>
+
+    <method name="Activate"/>
+
+    <method name="Deactivate"/>
+
+    <method name="Toggle"/>
+
+    <!-- lifecycle -->
+
+    <method name="ReloadConfig"/>
+
+    <method name="ReloadAddonConfig">
+      <arg name="addon" type="s" direction="in"/>
+    </method>
+
+    <method name="CanRestart">
+      <arg name="canRestart" type="b" direction="out"/>
+    </method>
+
+    <method name="Restart"/>
+
+    <method name="Exit"/>
+
+    <method name="Refresh"/>
+
+  </interface>
+</node>

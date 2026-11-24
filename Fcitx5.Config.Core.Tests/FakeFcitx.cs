@@ -66,8 +66,8 @@ public enum AddonReplyMode
 /// A minimal fake of <c>org.fcitx.Fcitx.Controller1</c> on a private bus.
 /// </summary>
 /// <remarks>
-/// It encodes its replies with <see cref="DbusConfigCodec"/> and decodes the payloads it receives
-/// with the same codec, so the tests exercise the real wire framing rather than a mock.
+/// It frames its replies and decodes the payloads it receives with the same codec the library
+/// uses, so the tests exercise the real wire format rather than a mock.
 /// </remarks>
 public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
 {
@@ -137,7 +137,7 @@ public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
                 {
                     Reply(context, "va(sa(sssva{sv}))", (ref MessageWriter writer) =>
                     {
-                        DbusConfigCodec.WriteVariant(ref writer, ConfigValue);
+                        writer.WriteVariant(ConfigValueCodec.Write(ConfigValue));
                         var groups = writer.WriteArrayStart(DBusType.Struct);
                         foreach (var group in ConfigGroups)
                         {
@@ -150,8 +150,8 @@ public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
                                 writer.WriteString(option.Name);
                                 writer.WriteString(option.Type);
                                 writer.WriteString(option.Description);
-                                DbusConfigCodec.WriteVariant(ref writer, option.DefaultValue ?? new RawConfigValue());
-                                DbusConfigCodec.WriteMap(ref writer, option.Properties ?? new RawConfigValue());
+                                writer.WriteVariant(ConfigValueCodec.Write(option.DefaultValue ?? new RawConfigValue()));
+                                WriteMap(ref writer, option.Properties ?? new RawConfigValue());
                             }
 
                             writer.WriteArrayEnd(options);
@@ -166,7 +166,7 @@ public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
                 {
                     var reader = request.GetBodyReader();
                     LastSetConfigUri = reader.ReadString();
-                    LastSetConfigValue = DbusConfigCodec.ReadVariant(ref reader);
+                    LastSetConfigValue = ConfigValueCodec.Read(reader.ReadVariantValue());
                     ReplyEmpty(context);
                     break;
                 }
@@ -269,7 +269,7 @@ public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
                         writer.WriteString(group?.Name ?? string.Empty);
                         writer.WriteString(group?.DefaultInputMethod ?? string.Empty);
                         writer.WriteString(group?.DefaultLayout ?? string.Empty);
-                        DbusConfigCodec.WriteMap(ref writer, group?.Properties ?? new RawConfigValue());
+                        WriteMap(ref writer, group?.Properties ?? new RawConfigValue());
 
                         var entries = writer.WriteArrayStart(DBusType.Struct);
                         foreach (var item in group?.Items ?? Array.Empty<FullInputMethodEntry>())
@@ -284,7 +284,7 @@ public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
                             writer.WriteString(item.Addon);
                             writer.WriteBool(item.Configurable);
                             writer.WriteString(item.Layout);
-                            DbusConfigCodec.WriteMap(ref writer, item.Properties);
+                            WriteMap(ref writer, item.Properties);
                         }
 
                         writer.WriteArrayEnd(entries);
@@ -329,6 +329,27 @@ public sealed class FakeFcitx : IPathMethodHandler, IAsyncDisposable
     {
         await _connection.ReleaseNameAsync(ServiceName).ConfigureAwait(false);
         _connection.Dispose();
+    }
+
+    /// <summary>Writes a bare <c>a{sv}</c> member, as the daemon does for properties.</summary>
+    private static void WriteMap(ref MessageWriter writer, RawConfigValue node)
+    {
+        var map = writer.WriteDictionaryStart();
+        if (!string.IsNullOrEmpty(node.Value))
+        {
+            writer.WriteDictionaryEntryStart();
+            writer.WriteString(RawConfigValue.SelfKey);
+            writer.WriteVariant(VariantValue.String(node.Value!));
+        }
+
+        foreach (var pair in node.OrderedChildren)
+        {
+            writer.WriteDictionaryEntryStart();
+            writer.WriteString(pair.Key);
+            writer.WriteVariant(ConfigValueCodec.Write(pair.Value));
+        }
+
+        writer.WriteDictionaryEnd(map);
     }
 
     private static void WriteAddonsV2(ref MessageWriter writer)

@@ -16,6 +16,15 @@
 
     <ItemGroup>
         <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.2"/>
+        <!-- Compile-time only: the generated proxy is part of this assembly, so a consumer needs
+             neither the generator nor the interface XML. -->
+        <PackageReference Include="Tmds.DBus.Generator" Version="0.95.3" PrivateAssets="all"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <AdditionalFiles Include="Transport/Dbus/org.fcitx.Fcitx.Controller1.xml"
+                         Namespace="Fcitx5.Config.Core.Transport.Dbus.Generated"
+                         DBusGeneratorMode="Proxy"/>
     </ItemGroup>
 
     <ItemGroup>

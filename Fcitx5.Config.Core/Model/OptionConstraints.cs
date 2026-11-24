@@ -211,13 +211,22 @@ public sealed class OptionConstraints
             return Array.Empty<EnumItem>();
         }
 
-        var result = new EnumItem[node.ChildNames.Count];
-        var index = 0;
+        // fcitx5 numbers the entries ("0", "1", ...), so the position is in the key. Sorting by it
+        // keeps the declaration order even though the tree came from a dictionary, whose
+        // enumeration order is not specified.
+        var result = new List<EnumItem>(node.ChildNames.Count);
         foreach (var pair in node.OrderedChildren)
         {
-            result[index++] = new EnumItem(pair.Key, pair.Value.Value ?? string.Empty, null);
+            result.Add(new EnumItem(pair.Key, pair.Value.Value ?? string.Empty, null));
         }
 
+        result.Sort(static (left, right) => CompareIndex(left.Index, right.Index));
         return result;
     }
+
+    private static int CompareIndex(string left, string right) =>
+        int.TryParse(left, NumberStyles.Integer, CultureInfo.InvariantCulture, out var leftIndex) &&
+        int.TryParse(right, NumberStyles.Integer, CultureInfo.InvariantCulture, out var rightIndex)
+            ? leftIndex.CompareTo(rightIndex)
+            : string.CompareOrdinal(left, right);
 }
