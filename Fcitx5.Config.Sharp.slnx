@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Fcitx5.Config.Core.Tests/Fcitx5.Config.Core.Tests.csproj" />
+  <Project Path="Fcitx5.Config.Core/Fcitx5.Config.Core.csproj" />
+</Solution>
