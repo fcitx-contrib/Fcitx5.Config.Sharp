@@ -11,7 +11,9 @@ namespace Fcitx5.Config.Core.Abstractions;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Implementations exist for D-Bus (Linux) and for the Beast HTTP bridge (macOS, Windows).
+/// The only implementation today is D-Bus on Linux. The interface exists so that another transport
+/// can be added without changing callers; <see cref="Capabilities"/> is what a caller checks rather
+/// than hard coding an assumption about the platform.
 /// Call <see cref="ConnectAsync"/> once before using any other member.
 /// </para>
 /// <para>

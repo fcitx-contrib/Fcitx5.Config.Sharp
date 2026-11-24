@@ -3,10 +3,13 @@ using System;
 namespace Fcitx5.Config.Core.Abstractions;
 
 /// <summary>
-/// The features a transport provides. Transports differ substantially: the D-Bus transport
-/// exposes the full controller API, while the HTTP (Beast) transport used on macOS and Windows
-/// currently only supports configuration read/write plus a few runtime commands.
+/// The features a transport provides.
 /// </summary>
+/// <remarks>
+/// The D-Bus transport implements all of them. The flags exist because a transport need not:
+/// a future one may be able to read and write configuration without, say, enumerating groups, and
+/// a caller is expected to check for the flag it needs instead of assuming the whole set.
+/// </remarks>
 [Flags]
 public enum FcitxCapabilities
 {

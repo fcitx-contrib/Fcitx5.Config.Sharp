@@ -14,9 +14,9 @@ namespace Fcitx5.Config.Core.Fcitx;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The controller is transport agnostic: it forwards to an <see cref="IFcitxSession"/>, which is the
-/// D-Bus transport on Linux and the Beast HTTP transport on macOS and Windows. Members that the
-/// underlying transport cannot serve throw <see cref="NotSupportedException"/>; check
+/// The controller is transport agnostic: it forwards to an <see cref="IFcitxSession"/>, whose only
+/// implementation today is D-Bus. Members that the underlying transport cannot serve throw
+/// <see cref="NotSupportedException"/>; check
 /// <see cref="Capabilities"/> (or <see cref="Supports"/>) first when building a UI.
 /// </para>
 /// <para>
