@@ -206,6 +206,10 @@ public sealed class FcitxController : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Reads one input method group; a null or empty name means the current group.</summary>
+    /// <exception cref="FcitxErrorException">
+    /// The group does not exist; <see cref="FcitxErrorException.Kind"/> is
+    /// <see cref="FcitxErrorKind.NotFound"/>.
+    /// </exception>
     public Task<InputMethodGroup> GetInputMethodGroupAsync(
         string? groupName = null,
         CancellationToken cancellationToken = default)

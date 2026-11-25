@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Fcitx5.Config.Core.Abstractions;
 using Fcitx5.Config.Core.Model;
 using Fcitx5.Config.Core.Transport.Dbus;
 using Xunit;
@@ -80,10 +81,29 @@ public class DbusSessionTests
         await using var fake = await StartFakeAsync();
         fake.AddonsMode = AddonReplyMode.Error;
 
-        var exception = await Assert.ThrowsAsync<Tmds.DBus.Protocol.DBusErrorReplyException>(
+        var exception = await Assert.ThrowsAsync<FcitxErrorException>(
             () => session.GetAddonsAsync());
 
-        Assert.Equal("org.fcitx.Test.Failure", exception.ErrorName);
+        // The fake reports an error name outside the standard set, so the kind falls back to
+        // Unknown rather than guessing, and the name stays available for the caller to inspect.
+        Assert.Equal(FcitxErrorKind.Unknown, exception.Kind);
+        Assert.Equal("org.fcitx.Test.Failure", exception.TransportErrorName);
+        Assert.Equal("GetAddonsV2 failed on purpose.", exception.Message);
+    }
+
+    [SkippableFact]
+    public async Task Calls_WithNoDaemonOnTheBus_ReportUnavailable()
+    {
+        await using var session = await ConnectAsync();
+
+        // The private bus is running but nothing owns org.fcitx.Fcitx5, which is exactly what a
+        // configuration manager sees before the daemon starts.
+        Assert.False(session.IsAvailable);
+
+        var exception = await Assert.ThrowsAsync<FcitxUnavailableException>(
+            () => session.GetStateAsync());
+
+        Assert.Equal("org.freedesktop.DBus.Error.ServiceUnknown", exception.TransportErrorName);
     }
 
     [SkippableFact]
@@ -186,9 +206,10 @@ public class DbusSessionTests
         await using var fake = await StartFakeAsync();
         fake.Group = null;
 
-        var exception = await Assert.ThrowsAsync<KeyNotFoundException>(
+        var exception = await Assert.ThrowsAsync<FcitxErrorException>(
             () => session.GetInputMethodGroupAsync("Missing"));
 
+        Assert.Equal(FcitxErrorKind.NotFound, exception.Kind);
         Assert.Contains("Missing", exception.Message, StringComparison.Ordinal);
     }
 

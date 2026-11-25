@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Fcitx5.Config.Core.Abstractions;
 using Fcitx5.Config.Core.Model;
 using Fcitx5.Config.Core.Transport.Dbus.Generated;
 using Tmds.DBus.Protocol;
@@ -14,15 +15,13 @@ namespace Fcitx5.Config.Core.Transport.Dbus;
 /// <remarks>
 /// <para>
 /// <see cref="Controller1"/> (generated from <c>org.fcitx.Fcitx.Controller1.xml</c>) speaks D-Bus
-/// tuples; this class maps them to the model, so the rest of the library never sees a wire type.
-/// Keeping the mapping in one place also keeps two policies in one place: the token is checked
-/// before a call is dispatched, and a call that is already on the wire is only stopped from being
-/// awaited.
+/// tuples; this class maps them to the model and is the only place a D-Bus failure becomes a
+/// <see cref="FcitxException"/>.
 /// </para>
 /// <para>
-/// The generated proxy has no cancellation support of its own, and a dispatched call cannot be
-/// recalled. Checking the token first matters for writes: a cancelled <c>SetConfig</c> must not
-/// reach the daemon, or the user's configuration is overwritten after they cancelled.
+/// Every call goes through <see cref="CallAsync{T}"/>, which checks the token before dispatch and
+/// translates on the way out. The check has to come first because invoking the proxy is what sends
+/// the message, which is why the helper takes a factory rather than a task.
 /// </para>
 /// </remarks>
 internal sealed class ControllerClient
@@ -47,33 +46,41 @@ internal sealed class ControllerClient
         string uri,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var (value, description) = await _proxy
-            .GetConfigAsync(uri)
-            .WithCancellation(cancellationToken)
+        var (value, description) = await CallAsync(
+                () => _proxy.GetConfigAsync(uri),
+                cancellationToken)
             .ConfigureAwait(false);
 
         return (ConfigValueCodec.Read(value), ConfigValueCodec.ReadDescription(description));
     }
 
-    public Task SetConfigAsync(string uri, RawConfigValue value, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy
-            .SetConfigAsync(uri, ConfigValueCodec.Write(value))
-            .WithCancellation(cancellationToken);
-    }
+    public Task SetConfigAsync(string uri, RawConfigValue value, CancellationToken cancellationToken = default) =>
+        CallAsync(() => _proxy.SetConfigAsync(uri, ConfigValueCodec.Write(value)), cancellationToken);
 
     // ---------------------------------------------------------------- addons
 
-    /// <summary>Reads the addon list, including the fields only <c>GetAddonsV2</c> reports.</summary>
-    public async Task<AddonInfo[]> GetAddonsV2Async(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Reads the addon list, falling back to the shorter reply of daemons predating
+    /// <c>GetAddonsV2</c>.
+    /// </summary>
+    public async Task<AddonInfo[]> GetAddonsAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var raw = await _proxy
-            .GetAddonsV2Async()
-            .WithCancellation(cancellationToken)
-            .ConfigureAwait(false);
+        try
+        {
+            return await GetAddonsV2Async(cancellationToken).ConfigureAwait(false);
+        }
+        catch (FcitxErrorException exception)
+            when (string.Equals(exception.TransportErrorName, UnknownMethodErrorName, StringComparison.Ordinal))
+        {
+            // Only a missing method means "old daemon". Any other refusal is a real failure, and
+            // retrying it against the older method would report something unrelated.
+            return await GetAddonsV1Async(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<AddonInfo[]> GetAddonsV2Async(CancellationToken cancellationToken)
+    {
+        var raw = await CallAsync(_proxy.GetAddonsV2Async, cancellationToken).ConfigureAwait(false);
 
         var result = new AddonInfo[raw.Length];
         for (var i = 0; i < raw.Length; i++)
@@ -95,14 +102,9 @@ internal sealed class ControllerClient
         return result;
     }
 
-    /// <summary>Reads addons from daemons that predate <c>GetAddonsV2</c>.</summary>
-    public async Task<AddonInfo[]> GetAddonsV1Async(CancellationToken cancellationToken = default)
+    private async Task<AddonInfo[]> GetAddonsV1Async(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var raw = await _proxy
-            .GetAddonsAsync()
-            .WithCancellation(cancellationToken)
-            .ConfigureAwait(false);
+        var raw = await CallAsync(_proxy.GetAddonsAsync, cancellationToken).ConfigureAwait(false);
 
         var result = new AddonInfo[raw.Length];
         for (var i = 0; i < raw.Length; i++)
@@ -118,8 +120,6 @@ internal sealed class ControllerClient
         IReadOnlyDictionary<string, bool> states,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
         var raw = new (string, bool)[states.Count];
         var index = 0;
         foreach (var pair in states)
@@ -127,18 +127,14 @@ internal sealed class ControllerClient
             raw[index++] = (pair.Key, pair.Value);
         }
 
-        return _proxy.SetAddonsStateAsync(raw).WithCancellation(cancellationToken);
+        return CallAsync(() => _proxy.SetAddonsStateAsync(raw), cancellationToken);
     }
 
     // ---------------------------------------------------------------- input methods
 
     public async Task<InputMethodEntry[]> GetInputMethodsAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var raw = await _proxy
-            .AvailableInputMethodsAsync()
-            .WithCancellation(cancellationToken)
-            .ConfigureAwait(false);
+        var raw = await CallAsync(_proxy.AvailableInputMethodsAsync, cancellationToken).ConfigureAwait(false);
 
         var result = new InputMethodEntry[raw.Length];
         for (var i = 0; i < raw.Length; i++)
@@ -160,11 +156,7 @@ internal sealed class ControllerClient
     public async Task<KeyboardLayoutInfo[]> GetKeyboardLayoutsAsync(
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var raw = await _proxy
-            .AvailableKeyboardLayoutsAsync()
-            .WithCancellation(cancellationToken)
-            .ConfigureAwait(false);
+        var raw = await CallAsync(_proxy.AvailableKeyboardLayoutsAsync, cancellationToken).ConfigureAwait(false);
 
         var result = new KeyboardLayoutInfo[raw.Length];
         for (var i = 0; i < raw.Length; i++)
@@ -183,26 +175,17 @@ internal sealed class ControllerClient
         return result;
     }
 
-    public Task<string[]> GetInputMethodGroupsAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy.InputMethodGroupsAsync().WithCancellation(cancellationToken);
-    }
+    public Task<string[]> GetInputMethodGroupsAsync(CancellationToken cancellationToken = default) =>
+        CallAsync(_proxy.InputMethodGroupsAsync, cancellationToken);
 
-    public Task<string> GetCurrentInputMethodGroupAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy.CurrentInputMethodGroupAsync().WithCancellation(cancellationToken);
-    }
+    public Task<string> GetCurrentInputMethodGroupAsync(CancellationToken cancellationToken = default) =>
+        CallAsync(_proxy.CurrentInputMethodGroupAsync, cancellationToken);
 
     public async Task<InputMethodGroup> GetInputMethodGroupAsync(
         string groupName,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var group = await _proxy
-            .FullInputMethodGroupInfoAsync(groupName)
-            .WithCancellation(cancellationToken)
+        var group = await CallAsync(() => _proxy.FullInputMethodGroupInfoAsync(groupName), cancellationToken)
             .ConfigureAwait(false);
 
         var items = new FullInputMethodEntry[group.Items.Length];
@@ -234,47 +217,36 @@ internal sealed class ControllerClient
 
     public Task SetInputMethodGroupAsync(InputMethodGroup group, CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
         var items = new (string, string)[group.Items.Length];
         for (var i = 0; i < items.Length; i++)
         {
             items[i] = (group.Items[i].UniqueName, group.Items[i].Layout);
         }
 
-        return _proxy
-            .SetInputMethodGroupInfoAsync(group.Name, group.DefaultLayout, items)
-            .WithCancellation(cancellationToken);
+        return CallAsync(
+            () => _proxy.SetInputMethodGroupInfoAsync(group.Name, group.DefaultLayout, items),
+            cancellationToken);
     }
 
     public Task AddInputMethodGroupAsync(string groupName, CancellationToken cancellationToken = default) =>
-        CallWithNameAsync(_proxy.AddInputMethodGroupAsync, groupName, cancellationToken);
+        CallAsync(() => _proxy.AddInputMethodGroupAsync(groupName), cancellationToken);
 
     public Task RemoveInputMethodGroupAsync(string groupName, CancellationToken cancellationToken = default) =>
-        CallWithNameAsync(_proxy.RemoveInputMethodGroupAsync, groupName, cancellationToken);
+        CallAsync(() => _proxy.RemoveInputMethodGroupAsync(groupName), cancellationToken);
 
     public Task SwitchInputMethodGroupAsync(string groupName, CancellationToken cancellationToken = default) =>
-        CallWithNameAsync(_proxy.SwitchInputMethodGroupAsync, groupName, cancellationToken);
+        CallAsync(() => _proxy.SwitchInputMethodGroupAsync(groupName), cancellationToken);
 
     // ---------------------------------------------------------------- runtime
 
-    public Task<int> GetStateAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy.StateAsync().WithCancellation(cancellationToken);
-    }
+    public Task<int> GetStateAsync(CancellationToken cancellationToken = default) =>
+        CallAsync(_proxy.StateAsync, cancellationToken);
 
-    public Task<string> GetCurrentInputMethodAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy.CurrentInputMethodAsync().WithCancellation(cancellationToken);
-    }
+    public Task<string> GetCurrentInputMethodAsync(CancellationToken cancellationToken = default) =>
+        CallAsync(_proxy.CurrentInputMethodAsync, cancellationToken);
 
-    public Task SetCurrentInputMethodAsync(string uniqueName, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy.SetCurrentIMAsync(uniqueName).WithCancellation(cancellationToken);
-    }
+    public Task SetCurrentInputMethodAsync(string uniqueName, CancellationToken cancellationToken = default) =>
+        CallAsync(() => _proxy.SetCurrentIMAsync(uniqueName), cancellationToken);
 
     public Task ActivateAsync(CancellationToken cancellationToken = default) =>
         CallAsync(_proxy.ActivateAsync, cancellationToken);
@@ -291,13 +263,10 @@ internal sealed class ControllerClient
         CallAsync(_proxy.ReloadConfigAsync, cancellationToken);
 
     public Task ReloadAddonConfigAsync(string addonName, CancellationToken cancellationToken = default) =>
-        CallWithNameAsync(_proxy.ReloadAddonConfigAsync, addonName, cancellationToken);
+        CallAsync(() => _proxy.ReloadAddonConfigAsync(addonName), cancellationToken);
 
-    public Task<bool> CanRestartAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _proxy.CanRestartAsync().WithCancellation(cancellationToken);
-    }
+    public Task<bool> CanRestartAsync(CancellationToken cancellationToken = default) =>
+        CallAsync(_proxy.CanRestartAsync, cancellationToken);
 
     public Task RestartAsync(CancellationToken cancellationToken = default) =>
         CallAsync(_proxy.RestartAsync, cancellationToken);
@@ -310,29 +279,33 @@ internal sealed class ControllerClient
 
     // ---------------------------------------------------------------- internals
 
-    /// <summary>Whether <paramref name="exception"/> reports a method the daemon does not have.</summary>
-    public static bool IsUnknownMethod(DBusErrorReplyException exception) =>
-        string.Equals(exception.ErrorName, UnknownMethodErrorName, StringComparison.Ordinal);
-
-    /// <summary>
-    /// Runs a call that takes no arguments. It is deferred so the token is checked before dispatch.
-    /// </summary>
-    private static Task CallAsync(Func<Task> call, CancellationToken cancellationToken)
+    /// <summary>Checks the token, dispatches, and translates a transport failure.</summary>
+    private static async Task<T> CallAsync<T>(Func<Task<T>> call, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return call().WithCancellation(cancellationToken);
+
+        try
+        {
+            return await call().WithCancellation(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (DbusErrors.Translate(exception) is { } translated)
+        {
+            throw translated;
+        }
     }
 
-    /// <summary>
-    /// Runs a call whose only argument is a single string. It is deferred so the token is checked
-    /// before dispatch.
-    /// </summary>
-    private static Task CallWithNameAsync(
-        Func<string, Task> call,
-        string name,
-        CancellationToken cancellationToken)
+    /// <inheritdoc cref="CallAsync{T}"/>
+    private static async Task CallAsync(Func<Task> call, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return call(name).WithCancellation(cancellationToken);
+
+        try
+        {
+            await call().WithCancellation(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (DbusErrors.Translate(exception) is { } translated)
+        {
+            throw translated;
+        }
     }
 }

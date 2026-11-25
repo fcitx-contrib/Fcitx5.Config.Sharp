@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using Fcitx5.Config.Core.Abstractions;
 using Fcitx5.Config.Core.Transport.Dbus;
 
 namespace Fcitx5.Config.Core.Tests;
@@ -48,5 +51,24 @@ public class FcitxConnectionTests
         connection.Dispose();
 
         Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public async Task ConnectAsync_ToABusThatIsNotThere_ReportsUnavailable()
+    {
+        var socket = Path.Combine(
+            Path.GetTempPath(),
+            "fcitx5-core-tests-missing-" + Guid.NewGuid().ToString("N"));
+        using var connection = new FcitxConnection("unix:path=" + socket);
+
+        var exception = await Assert.ThrowsAsync<FcitxUnavailableException>(() => connection.ConnectAsync());
+
+        // The bus library's own exception is kept for diagnostics, but it is not the type a caller
+        // has to handle.
+        Assert.NotNull(exception.InnerException);
+        Assert.False(connection.IsAvailable);
+
+        // A failed connect is not cached, so the next attempt runs again instead of replaying it.
+        await Assert.ThrowsAsync<FcitxUnavailableException>(() => connection.ConnectAsync());
     }
 }

@@ -21,6 +21,14 @@ namespace Fcitx5.Config.Core.Abstractions;
 /// does not support throws <see cref="NotSupportedException"/>.
 /// </para>
 /// <para>
+/// Failures from fcitx5 or from the transport surface as <see cref="FcitxException"/>:
+/// <see cref="FcitxUnavailableException"/> when the daemon cannot be reached (wait for
+/// <see cref="AvailabilityChanged"/>), <see cref="FcitxErrorException"/> when it refuses a call
+/// (<see cref="FcitxErrorException.Kind"/> says why), and
+/// <see cref="FcitxUnexpectedResponseException"/> when a reply cannot be decoded. Argument errors
+/// stay the usual .NET exceptions, and cancellation stays <see cref="OperationCanceledException"/>.
+/// </para>
+/// <para>
 /// Disposal is synchronous internally; <see cref="IAsyncDisposable"/> is offered so that consumers
 /// can use <c>await using</c> uniformly alongside other asynchronous resources.
 /// </para>
@@ -74,6 +82,10 @@ public interface IFcitxSession : IDisposable, IAsyncDisposable
     Task<string> GetCurrentInputMethodGroupAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Reads a full input method group; a null or empty name means the current group.</summary>
+    /// <exception cref="FcitxErrorException">
+    /// The group does not exist; <see cref="FcitxErrorException.Kind"/> is
+    /// <see cref="FcitxErrorKind.NotFound"/>.
+    /// </exception>
     Task<InputMethodGroup> GetInputMethodGroupAsync(
         string? groupName = null,
         CancellationToken cancellationToken = default);

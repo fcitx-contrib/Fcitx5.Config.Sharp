@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Fcitx5.Config.Core.Abstractions;
 using Fcitx5.Config.Core.Model;
-using Tmds.DBus.Protocol;
 
 namespace Fcitx5.Config.Core.Transport.Dbus;
 
@@ -13,7 +12,9 @@ namespace Fcitx5.Config.Core.Transport.Dbus;
 /// </summary>
 /// <remarks>
 /// This is the full-featured transport: it implements every member of <see cref="IFcitxSession"/>,
-/// so <see cref="Capabilities"/> is always <see cref="FcitxCapabilities.Full"/>.
+/// so <see cref="Capabilities"/> is always <see cref="FcitxCapabilities.Full"/>. It names no D-Bus
+/// type either; <see cref="ControllerClient"/> translates a transport failure on the way out, so
+/// this class only maps results onto the model and adds what the wire protocol cannot express.
 /// </remarks>
 internal sealed class DbusSession : IFcitxSession
 {
@@ -53,7 +54,8 @@ internal sealed class DbusSession : IFcitxSession
         await _connection.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
         var connection = _connection.Connection
-                         ?? throw new InvalidOperationException("The D-Bus connection is not available.");
+                         ?? throw new FcitxUnavailableException(
+                             "The D-Bus connection is not available; the connection was closed.");
 
         _client = new ControllerClient(connection, FcitxConnection.ServiceName);
     }
@@ -94,18 +96,8 @@ internal sealed class DbusSession : IFcitxSession
     // ---------------------------------------------------------------- addons
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<AddonInfo>> GetAddonsAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            return await Client.GetAddonsV2Async(cancellationToken).ConfigureAwait(false);
-        }
-        catch (DBusErrorReplyException exception) when (ControllerClient.IsUnknownMethod(exception))
-        {
-            // Daemons predating GetAddonsV2 only report the shorter set of fields.
-            return await Client.GetAddonsV1Async(cancellationToken).ConfigureAwait(false);
-        }
-    }
+    public async Task<IReadOnlyList<AddonInfo>> GetAddonsAsync(CancellationToken cancellationToken = default) =>
+        await Client.GetAddonsAsync(cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task SetAddonsEnabledAsync(
@@ -147,7 +139,8 @@ internal sealed class DbusSession : IFcitxSession
 
         if (string.IsNullOrEmpty(group.Name))
         {
-            throw new KeyNotFoundException(
+            throw new FcitxErrorException(
+                FcitxErrorKind.NotFound,
                 groupName is null
                     ? "fcitx5 did not report a current input method group."
                     : $"Input method group '{groupName}' does not exist.");

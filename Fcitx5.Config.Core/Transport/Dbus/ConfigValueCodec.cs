@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Fcitx5.Config.Core.Abstractions;
 using Fcitx5.Config.Core.Model;
 using Tmds.DBus.Protocol;
 
@@ -39,7 +40,7 @@ namespace Fcitx5.Config.Core.Transport.Dbus;
 internal static class ConfigValueCodec
 {
     /// <summary>Reads a <c>v</c> holding a configuration tree.</summary>
-    /// <exception cref="DBusUnexpectedValueException">
+    /// <exception cref="FcitxUnexpectedResponseException">
     /// The value is neither a string nor a map. fcitx5 emits nothing else, so this means the
     /// protocol changed; failing beats coercing the value into a string.
     /// </exception>
@@ -52,7 +53,7 @@ internal static class ConfigValueCodec
 
         if (value.Type != VariantValueType.Dictionary)
         {
-            throw new DBusUnexpectedValueException(
+            throw new FcitxUnexpectedResponseException(
                 $"A configuration value must be a string or a map, but the daemon sent '{value.Type}'.");
         }
 
@@ -154,6 +155,6 @@ internal static class ConfigValueCodec
     private static string ReadSelfValue(VariantValue value) =>
         value.Type == VariantValueType.String
             ? value.GetString()
-            : throw new DBusUnexpectedValueException(
+            : throw new FcitxUnexpectedResponseException(
                 $"The own value of a configuration node must be a string, but the daemon sent '{value.Type}'.");
 }

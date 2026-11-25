@@ -144,12 +144,18 @@ public class DbusIntegrationTests
     }
 
     [SkippableFact]
-    public async Task GetConfig_UnknownAddon_Throws()
+    public async Task GetConfig_UnknownAddon_ReportsInvalidArgument()
     {
         using var controller = await ConnectAsync();
 
-        await Assert.ThrowsAnyAsync<Exception>(
+        var exception = await Assert.ThrowsAsync<FcitxErrorException>(
             () => controller.GetAddonConfigAsync("definitely-not-an-addon"));
+
+        // fcitx5 answers a requested addon it does not know with InvalidArgs, not with a
+        // "not found" of its own, so the kind follows the daemon rather than being reinterpreted.
+        Assert.Equal(FcitxErrorKind.InvalidArgument, exception.Kind);
+        Assert.Equal("org.freedesktop.DBus.Error.InvalidArgs", exception.TransportErrorName);
+        Assert.Equal("Addon does not exist.", exception.Message);
     }
 
     [SkippableFact]

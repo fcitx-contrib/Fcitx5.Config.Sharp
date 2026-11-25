@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Fcitx5.Config.Core.Abstractions;
 using Tmds.DBus.Protocol;
 
 namespace Fcitx5.Config.Core.Transport.Dbus;
@@ -93,7 +94,8 @@ internal sealed class FcitxConnection : IDisposable, IAsyncDisposable
         try
         {
             var address = _busAddress ?? DBusAddress.Session
-                ?? throw new InvalidOperationException("The D-Bus session bus address is not set.");
+                ?? throw new FcitxUnavailableException(
+                    "The D-Bus session bus address is not set, so fcitx5 cannot be reached.");
 
             connection = new DBusConnection(address);
 
@@ -128,8 +130,9 @@ internal sealed class FcitxConnection : IDisposable, IAsyncDisposable
             SetAvailability(watcher.GetCurrentOwner() is not null);
             _ = WatchAvailabilityAsync(watcher, cancellation.Token);
         }
-        catch
+        catch (Exception exception)
         {
+            // A failed connect must not be cached, or the next call replays it instead of retrying.
             lock (_gate)
             {
                 if (connection is not null && ReferenceEquals(_connection, connection))
@@ -137,13 +140,18 @@ internal sealed class FcitxConnection : IDisposable, IAsyncDisposable
                     _connection = null;
                 }
 
-                // Reset so that the next ConnectAsync retries instead of replaying the failure.
                 _connectTask = null;
                 _isAvailable = false;
             }
 
             connection?.Dispose();
-            throw;
+
+            if (DbusErrors.Translate(exception) is not { } translated)
+            {
+                throw;
+            }
+
+            throw translated;
         }
     }
 

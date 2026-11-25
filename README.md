@@ -103,19 +103,53 @@ still check rather than assume, and a second transport then needs no caller chan
 
 ## Errors and availability
 
+Failures from fcitx5 or from the transport derive from `FcitxException`, so one `catch` covers them
+and no D-Bus type is needed.
+
 | Situation | Behaviour |
 | --- | --- |
-| No session bus | `DBusConnectFailedException`, or `InvalidOperationException` when no address can be determined |
+| No session bus address, or the bus is unreachable | `FcitxUnavailableException` |
 | fcitx5 not running | Connect succeeds, `IsAvailable` is false |
-| Call while unavailable | `DBusErrorReplyException` with `ServiceUnknown`; check `IsAvailable` first |
+| Call while unavailable | `FcitxUnavailableException`; check `IsAvailable` first |
+| fcitx5 refuses a call | `FcitxErrorException` with `Kind` |
+| A reply cannot be decoded | `FcitxUnexpectedResponseException` |
 | fcitx5 starts, exits or restarts | `AvailabilityChanged` fires |
 | Bus disconnects | Not re-established; create a new controller |
 
-Daemon refusals carry `ErrorName`, so an unknown addon is distinguishable from a bad argument
-without parsing text.
+`FcitxErrorException.Kind` is a small transport-neutral vocabulary — `InvalidArgument`, `NotFound`,
+`NotSupported`, `Conflict`, `AccessDenied`, `PayloadTooLarge`, `Failed`, `Unknown` — deliberately not
+D-Bus flavoured, so error handling does not change with the transport: the HTTP transport's
+`not-implemented` is `NotSupported`, its `method-not-allowed` is an HTTP routing detail with no
+counterpart here, and its `unavailable` is the availability exception rather than a kind.
+`TransportErrorName` keeps the transport's own name (`org.freedesktop.DBus.Error.InvalidArgs`) for
+logs, never for control flow; an unrecognised name gives `Kind = Unknown` instead of a guess.
+
+The kind follows the daemon rather than being reinterpreted: fcitx5 answers a requested addon it
+does not know with `InvalidArgs`, so that call reports `InvalidArgument`, not `NotFound`.
+
+Argument errors stay `ArgumentException`, a feature the transport does not advertise throws
+`NotSupportedException` before any call is made, and cancellation stays `OperationCanceledException`.
+
+```csharp
+using Fcitx5.Config.Core.Abstractions;
+
+try
+{
+    await controller.SetAddonConfigAsync("pinyin", changes);
+}
+catch (FcitxUnavailableException)
+{
+    // fcitx5 went away; wait for AvailabilityChanged, then retry.
+}
+catch (FcitxErrorException error) when (error.Kind == FcitxErrorKind.InvalidArgument)
+{
+    // The daemon refused the value; error.Message is its own text.
+}
+```
 
 `GetAddonsAsync` falls back to `GetAddons` on daemons predating `GetAddonsV2`; `OnDemand`,
-`Dependencies` and `OptionalDependencies` are then empty.
+`Dependencies` and `OptionalDependencies` are then empty. Only a missing method triggers that
+fallback — any other refusal propagates, so a real failure is not retried as an old daemon.
 
 ## Writing configuration
 

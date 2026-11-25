@@ -1,4 +1,5 @@
 using System;
+using Fcitx5.Config.Core.Abstractions;
 using Fcitx5.Config.Core.Model;
 using Fcitx5.Config.Core.Transport.Dbus;
 using Tmds.DBus.Protocol;
@@ -29,7 +30,7 @@ public class ConfigValueCodecTests
     [Fact]
     public void Read_RejectsALeafThatIsNotAString()
     {
-        var exception = Assert.Throws<DBusUnexpectedValueException>(
+        var exception = Assert.Throws<FcitxUnexpectedResponseException>(
             () => ConfigValueCodec.Read(VariantValue.Int32(1)));
 
         Assert.Contains("Int32", exception.Message, StringComparison.Ordinal);
