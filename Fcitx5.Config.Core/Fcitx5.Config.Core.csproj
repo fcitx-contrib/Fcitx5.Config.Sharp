@@ -12,7 +12,16 @@
         <!-- The AOT analyzer only exists for net8.0+ target frameworks; enabling it on the
              netstandard2.1 target is rejected with NETSDK1210. -->
         <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
+        <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Apache-2.0 section 4(a) asks for the license text to travel with a distribution, and
+             section 4(d) for a supplied NOTICE to be passed on; the SPDX expression above is the
+             machine-readable form of the same declaration. -->
+        <None Include="../LICENSE" Pack="true" PackagePath="/"/>
+        <None Include="../NOTICE" Pack="true" PackagePath="/"/>
+    </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.2"/>
