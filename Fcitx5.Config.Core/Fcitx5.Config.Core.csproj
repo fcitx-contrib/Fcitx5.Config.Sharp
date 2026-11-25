@@ -13,9 +13,14 @@
              netstandard2.1 target is rejected with NETSDK1210. -->
         <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
         <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+        <Description>Read and write the configuration of a running fcitx5 instance.</Description>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
 
     <ItemGroup>
+        <!-- Packed so the package page explains what the library is; the same file serves the
+             repository. -->
+        <None Include="../README.md" Pack="true" PackagePath="/"/>
         <!-- Apache-2.0 section 4(a) asks for the license text to travel with a distribution, and
              section 4(d) for a supplied NOTICE to be passed on; the SPDX expression above is the
              machine-readable form of the same declaration. -->

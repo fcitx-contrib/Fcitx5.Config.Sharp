@@ -5,6 +5,7 @@ riderModule.iml
 /_ReSharper.Caches/
 # JetBrains Rider
 .idea/
+*.DotSettings.user
 
 # Native AOT smoke output
 artifacts/
